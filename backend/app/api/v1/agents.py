@@ -1,5 +1,5 @@
 from fastapi import APIRouter
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from agents.concierge.agent import concierge_agent
 
@@ -8,7 +8,7 @@ router = APIRouter(prefix="/concierge", tags=["concierge"])
 
 
 class ConciergeChatRequest(BaseModel):
-    message: str
+    message: str = Field(min_length=1)
 
 
 @router.post("/chat")

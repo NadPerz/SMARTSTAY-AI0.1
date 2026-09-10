@@ -4,3 +4,7 @@ pydantic
 pytest
 SQLAlchemy
 psycopg2-binary
+PyJWT
+passlib[bcrypt]
+bcrypt<5
+python-dotenv
