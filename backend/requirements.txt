@@ -2,3 +2,5 @@ fastapi
 uvicorn[standard]
 pydantic
 pytest
+SQLAlchemy
+psycopg2-binary
