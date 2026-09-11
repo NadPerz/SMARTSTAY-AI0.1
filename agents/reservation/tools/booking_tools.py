@@ -5,13 +5,8 @@ from sqlalchemy.orm import Session
 
 from app.models.user import User
 
-from agents.reservation.schemas.bookings import (
-    BookingSummary,
-    CreateBookingRequest,
-    ModifyBookingRequest,
-)
-from agents.reservation.schemas.rooms import RoomOut
-from agents.reservation.services import availability_service, booking_service
+from agents.reservation.schemas.bookings import CreateBookingRequest, ModifyBookingRequest
+from agents.reservation.services import booking_service
 from agents.reservation.services.exceptions import (
     BookingNotFoundError,
     NotAuthorizedError,
@@ -34,7 +29,9 @@ def get_booking_summary(
     Read-only — does NOT write anything to the database. This is what the
     agent must show the guest and get explicit agreement on BEFORE calling
     create_booking(confirm=True). This is the "show booking summary, ask
-    confirmation" step in the booking safety flow, not a formality.
+    confirmation" step in the booking safety flow, not a formality. The
+    actual summary-building logic lives in booking_service.build_booking_summary,
+    shared with the REST API so both surfaces agree on the numbers.
     """
     try:
         request = CreateBookingRequest(
@@ -48,28 +45,10 @@ def get_booking_summary(
         return {"success": False, "error": format_validation_error(exc)}
 
     try:
-        room = availability_service.get_room(db, request.room_id)
-        availability = availability_service.check_room_availability(
-            db,
-            request.room_id,
-            request.check_in_date,
-            request.check_out_date,
-            request.guests,
-        )
-    except RoomNotFoundError as exc:
+        summary = booking_service.build_booking_summary(db, request)
+    except (RoomNotFoundError, RoomUnavailableError) as exc:
         return {"success": False, "error": str(exc)}
 
-    if not availability.is_available:
-        return {"success": False, "error": availability.reason or "Room is not available"}
-
-    summary = BookingSummary(
-        room=RoomOut.model_validate(room),
-        check_in_date=request.check_in_date,
-        check_out_date=request.check_out_date,
-        nights=availability.nights,
-        guests=request.guests,
-        total_price=availability.total_price,
-    )
     return {"success": True, "data": summary.model_dump(mode="json")}
 
 

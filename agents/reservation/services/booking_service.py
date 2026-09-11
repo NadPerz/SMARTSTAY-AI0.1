@@ -7,9 +7,16 @@ from app.models.booking import Booking, BookingStatus
 from app.models.room import Room
 from app.models.user import User
 
-from agents.reservation.schemas.bookings import CreateBookingRequest, ModifyBookingRequest
+from agents.reservation.schemas.bookings import (
+    BookingSummary,
+    CreateBookingRequest,
+    ModifyBookingRequest,
+)
+from agents.reservation.schemas.rooms import RoomOut
 from agents.reservation.services.availability_service import (
     _nights,
+    check_room_availability,
+    get_room,
     has_overlapping_booking,
 )
 from agents.reservation.services.exceptions import (
@@ -25,6 +32,36 @@ from agents.reservation.services.exceptions import (
 # settles on a real role enum (Receptionist/Manager/Admin/Analyst).
 def _is_staff(user: User) -> bool:
     return user.role != "guest"
+
+
+def build_booking_summary(db: Session, request: CreateBookingRequest) -> BookingSummary:
+    """Build the "would you like to confirm this booking?" summary without
+    writing anything to the database.
+
+    Shared by the REST API's POST /api/bookings/summary endpoint and the
+    Reservation Agent's get_booking_summary tool — there is exactly one
+    place this logic lives, so the guest sees the same numbers whether
+    they're using the web UI or talking to the AI concierge.
+    """
+    room = get_room(db, request.room_id)
+    availability = check_room_availability(
+        db,
+        request.room_id,
+        request.check_in_date,
+        request.check_out_date,
+        request.guests,
+    )
+    if not availability.is_available:
+        raise RoomUnavailableError(availability.reason or "Room is not available")
+
+    return BookingSummary(
+        room=RoomOut.model_validate(room),
+        check_in_date=request.check_in_date,
+        check_out_date=request.check_out_date,
+        nights=availability.nights,
+        guests=request.guests,
+        total_price=availability.total_price,
+    )
 
 
 def create_booking(db: Session, user_id: int, request: CreateBookingRequest) -> Booking:
