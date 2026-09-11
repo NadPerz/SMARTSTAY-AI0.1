@@ -14,6 +14,17 @@ from agents.reservation.services.exceptions import RoomNotFoundError
 def _nights(check_in_date: date, check_out_date: date) -> int:
     return (check_out_date - check_in_date).days
 
+def get_room(db: Session, room_id: int) -> Room:
+    """Fetch a single room by id, or raise RoomNotFoundError.
+
+    Used by tools that need the full Room object (e.g. to build a booking
+    summary), as opposed to check_room_availability() which only returns
+    a yes/no verdict.
+    """
+    room = db.query(Room).filter(Room.id == room_id).first()
+    if room is None:
+        raise RoomNotFoundError(f"Room {room_id} does not exist")
+    return room
 
 def has_overlapping_booking(
     db: Session,
