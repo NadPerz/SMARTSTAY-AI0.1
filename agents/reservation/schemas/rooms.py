@@ -40,6 +40,20 @@ class RoomOut(BaseModel):
     capacity: int
     price_per_night: Decimal
 
+class RoomCreateRequest(BaseModel):
+    """Admin-only: add a new room to inventory.
+
+    Guarded by a staff-role check at the API layer, not by anything in
+    this schema — Pydantic validates shape, not who's allowed to submit it.
+    """
+
+    room_number: str = Field(min_length=1, max_length=20)
+    room_type: str = Field(min_length=1)
+    description: Optional[str] = None
+    capacity: int = Field(ge=1, le=20)
+    price_per_night: Decimal = Field(gt=0)
+    is_active: bool = True
+
 
 class RoomSearchResult(BaseModel):
     """A room plus computed pricing for a specific search's date range."""

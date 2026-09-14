@@ -11,6 +11,10 @@ class RoomNotFoundError(ReservationError):
     """Raised when a room_id doesn't exist or is inactive."""
 
 
+class RoomAlreadyExistsError(ReservationError):
+    """Raised when creating a room with a room_number that's already taken."""
+
+
 class RoomUnavailableError(ReservationError):
     """Raised when a room exists but can't be booked for the requested
     dates/guest count (double-booked, over capacity, wrong status, etc.)."""

@@ -132,6 +132,67 @@ def test_cannot_view_another_users_booking(
     assert response.status_code == 403
 
 
+def test_create_room_requires_auth(client):
+    response = client.post(
+        "/api/rooms",
+        json={"room_number": "701", "room_type": "Standard", "capacity": 2, "price_per_night": 90.00},
+    )
+    assert response.status_code in (401, 403)
+
+
+def test_create_room_rejects_guest_role(client, auth_headers):
+    """auth_headers registers a plain guest — must be forbidden from creating rooms."""
+    response = client.post(
+        "/api/rooms",
+        json={"room_number": "702", "room_type": "Standard", "capacity": 2, "price_per_night": 90.00},
+        headers=auth_headers,
+    )
+    assert response.status_code == 403
+
+
+def test_create_room_succeeds_for_staff(client, db_session):
+    from app.models.user import User
+    from app.security.jwt import create_access_token
+
+    staff = User(email="admin@test.com", password_hash="x", role="receptionist")
+    db_session.add(staff)
+    db_session.commit()
+
+    token = create_access_token({"sub": staff.email})
+    headers = {"Authorization": f"Bearer {token}"}
+
+    response = client.post(
+        "/api/rooms",
+        json={"room_number": "703", "room_type": "Suite", "capacity": 3, "price_per_night": 200.00},
+        headers=headers,
+    )
+    assert response.status_code == 201, response.text
+    assert response.json()["room_number"] == "703"
+
+
+def test_create_room_duplicate_returns_409(client, seeded_room, db_session):
+    from app.models.user import User
+    from app.security.jwt import create_access_token
+
+    staff = User(email="admin2@test.com", password_hash="x", role="manager")
+    db_session.add(staff)
+    db_session.commit()
+    token = create_access_token({"sub": staff.email})
+    headers = {"Authorization": f"Bearer {token}"}
+
+    response = client.post(
+        "/api/rooms",
+        json={
+            "room_number": seeded_room.room_number,
+            "room_type": "Standard",
+            "capacity": 2,
+            "price_per_night": 90.00,
+        },
+        headers=headers,
+    )
+    assert response.status_code == 409
+
+
 def test_unauthenticated_request_to_protected_route_rejected(client):
     response = client.get("/api/bookings")
     assert response.status_code in (401, 403)

@@ -30,7 +30,7 @@ from agents.reservation.services.exceptions import (
 # (only User.role, defaulting to "guest"). Anyone with a non-guest role is
 # treated as staff for booking access purposes. Revisit once the team
 # settles on a real role enum (Receptionist/Manager/Admin/Analyst).
-def _is_staff(user: User) -> bool:
+def is_staff(user: User) -> bool:
     return user.role != "guest"
 
 
@@ -121,7 +121,7 @@ def get_booking(db: Session, booking_id: int, current_user: User) -> Booking:
     booking = db.query(Booking).filter(Booking.id == booking_id).first()
     if booking is None:
         raise BookingNotFoundError(f"Booking {booking_id} does not exist")
-    if booking.user_id != current_user.id and not _is_staff(current_user):
+    if booking.user_id != current_user.id and not is_staff(current_user):
         raise NotAuthorizedError("You do not have permission to view this booking")
     return booking
 

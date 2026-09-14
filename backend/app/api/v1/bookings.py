@@ -17,19 +17,45 @@ from agents.reservation.schemas.bookings import (
     CreateBookingRequest,
     ModifyBookingRequest,
 )
-from agents.reservation.schemas.rooms import RoomSearchRequest, RoomSearchResult
+from agents.reservation.schemas.rooms import RoomSearchRequest, RoomSearchResult, RoomCreateRequest, RoomOut
 from agents.reservation.services import availability_service, booking_service
 from agents.reservation.services.exceptions import (
     BookingNotFoundError,
     NotAuthorizedError,
     RoomNotFoundError,
     RoomUnavailableError,
+    RoomAlreadyExistsError,
 )
 
 router = APIRouter(tags=["reservations"])
 
 
 # --- Rooms ------------------------------------------------------------
+
+def require_staff(current_user: User = Depends(get_current_user)) -> User:
+    """Dependency for admin-only routes. Reuses the same staff check the
+    service layer uses for booking access (booking_service.is_staff), so
+    "who counts as staff" has exactly one definition in the codebase."""
+    if not booking_service.is_staff(current_user):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="Staff access required"
+        )
+    return current_user
+
+
+@router.post("/rooms", response_model=RoomOut, status_code=status.HTTP_201_CREATED)
+def create_room(
+    request: RoomCreateRequest,
+    db: Session = Depends(get_db),
+    staff_user: User = Depends(require_staff),
+):
+    """Admin-only: add a new room to inventory. Requires a non-guest role
+    (see require_staff / booking_service.is_staff)."""
+    try:
+        return availability_service.create_room(db, request)
+    except RoomAlreadyExistsError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
+
 
 @router.get("/rooms/search", response_model=List[RoomSearchResult])
 def search_rooms(

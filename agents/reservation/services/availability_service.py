@@ -8,7 +8,7 @@ from app.models.room import Room
 
 from agents.reservation.schemas.bookings import AvailabilityCheckResponse
 from agents.reservation.schemas.rooms import RoomOut, RoomSearchRequest, RoomSearchResult
-from agents.reservation.services.exceptions import RoomNotFoundError
+from agents.reservation.services.exceptions import RoomNotFoundError, RoomCreateRequest, RoomAlreadyExistsError
 
 
 def _nights(check_in_date: date, check_out_date: date) -> int:
@@ -25,6 +25,36 @@ def get_room(db: Session, room_id: int) -> Room:
     if room is None:
         raise RoomNotFoundError(f"Room {room_id} does not exist")
     return room
+
+
+def create_room(db: Session, request: RoomCreateRequest) -> Room:
+    """Admin-only: add a new room to inventory.
+
+    Authorization (staff-only) is enforced at the API layer, not here —
+    this function assumes the caller has already been checked. Guards
+    against duplicate room_number with a pre-check rather than relying on
+    the DB's unique constraint to raise (which would surface as a raw
+    IntegrityError instead of a clean, catchable domain exception).
+    """
+    existing = db.query(Room).filter(Room.room_number == request.room_number).first()
+    if existing is not None:
+        raise RoomAlreadyExistsError(
+            f"Room number {request.room_number!r} already exists"
+        )
+
+    room = Room(
+        room_number=request.room_number,
+        room_type=request.room_type,
+        description=request.description,
+        capacity=request.capacity,
+        price_per_night=request.price_per_night,
+        is_active=request.is_active,
+    )
+    db.add(room)
+    db.commit()
+    db.refresh(room)
+    return room
+
 
 def has_overlapping_booking(
     db: Session,
