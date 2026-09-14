@@ -17,6 +17,7 @@ from app.db.database import Base, engine
 # Every model must be imported here so SQLAlchemy registers it on
 # Base.metadata before create_all() runs. Add new models to this list.
 from app.models.user import User  # noqa: F401
+from app.models.hotel import Hotel  # noqa: F401
 from app.models.room import Room  # noqa: F401
 from app.models.booking import Booking  # noqa: F401
 

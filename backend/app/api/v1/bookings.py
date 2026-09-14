@@ -17,20 +17,25 @@ from agents.reservation.schemas.bookings import (
     CreateBookingRequest,
     ModifyBookingRequest,
 )
-from agents.reservation.schemas.rooms import RoomSearchRequest, RoomSearchResult, RoomCreateRequest, RoomOut
+from agents.reservation.schemas.hotels import HotelCreateRequest, HotelOut
+from agents.reservation.schemas.rooms import (
+    RoomCreateRequest,
+    RoomOut,
+    RoomSearchRequest,
+    RoomSearchResult,
+)
 from agents.reservation.services import availability_service, booking_service
 from agents.reservation.services.exceptions import (
     BookingNotFoundError,
+    HotelNotFoundError,
     NotAuthorizedError,
+    RoomAlreadyExistsError,
     RoomNotFoundError,
     RoomUnavailableError,
-    RoomAlreadyExistsError,
 )
 
 router = APIRouter(tags=["reservations"])
 
-
-# --- Rooms ------------------------------------------------------------
 
 def require_staff(current_user: User = Depends(get_current_user)) -> User:
     """Dependency for admin-only routes. Reuses the same staff check the
@@ -43,16 +48,50 @@ def require_staff(current_user: User = Depends(get_current_user)) -> User:
     return current_user
 
 
+# --- Hotels ---------------------------------------------------------------
+
+@router.post("/hotels", response_model=HotelOut, status_code=status.HTTP_201_CREATED)
+def create_hotel(
+    request: HotelCreateRequest,
+    db: Session = Depends(get_db),
+    staff_user: User = Depends(require_staff),
+):
+    """Admin-only: add a new hotel to the platform."""
+    return availability_service.create_hotel(db, request)
+
+
+@router.get("/hotels", response_model=List[HotelOut])
+def list_hotels(
+    city: Optional[str] = Query(default=None),
+    db: Session = Depends(get_db),
+):
+    """Public — browse hotels, optionally filtered to one city. What a
+    guest would call before picking a city/hotel to search rooms within."""
+    return availability_service.list_hotels(db, city=city)
+
+
+@router.get("/hotels/{hotel_id}", response_model=HotelOut)
+def get_hotel(hotel_id: int, db: Session = Depends(get_db)):
+    try:
+        return availability_service.get_hotel(db, hotel_id)
+    except HotelNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
+
+
+# --- Rooms ------------------------------------------------------------
+
 @router.post("/rooms", response_model=RoomOut, status_code=status.HTTP_201_CREATED)
 def create_room(
     request: RoomCreateRequest,
     db: Session = Depends(get_db),
     staff_user: User = Depends(require_staff),
 ):
-    """Admin-only: add a new room to inventory. Requires a non-guest role
-    (see require_staff / booking_service.is_staff)."""
+    """Admin-only: add a new room to a hotel's inventory. Requires a
+    non-guest role (see require_staff / booking_service.is_staff)."""
     try:
         return availability_service.create_room(db, request)
+    except HotelNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
     except RoomAlreadyExistsError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
 
@@ -62,17 +101,24 @@ def search_rooms(
     check_in_date: date = Query(...),
     check_out_date: date = Query(...),
     guests: int = Query(..., ge=1, le=20),
+    city: Optional[str] = Query(default=None),
+    hotel_id: Optional[int] = Query(default=None),
     room_type: Optional[str] = Query(default=None),
     max_price: Optional[Decimal] = Query(default=None, gt=0),
     db: Session = Depends(get_db),
 ):
     """Public search — no authentication required, matching the guest
-    website's room browsing flow (you don't need an account to look)."""
+    website's room browsing flow (you don't need an account to look).
+    Searches every hotel on the platform by default; pass `city` to
+    narrow to one city, or `hotel_id` to search within one specific hotel.
+    """
     try:
         request = RoomSearchRequest(
             check_in_date=check_in_date,
             check_out_date=check_out_date,
             guests=guests,
+            city=city,
+            hotel_id=hotel_id,
             room_type=room_type,
             max_price=max_price,
         )

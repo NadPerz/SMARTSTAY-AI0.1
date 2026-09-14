@@ -92,12 +92,16 @@ class ModifyBookingRequest(BaseModel):
 class BookingOut(BaseModel):
     """A booking as returned to clients. Never expose other guests' bookings
     through this schema — the API layer must filter by the authenticated
-    user's id (or require staff role) before a booking reaches here."""
+    user's id (or require staff role) before a booking reaches here.
+
+    Embeds the full room (and, through it, the hotel) rather than just
+    room_id — a guest with several bookings across different hotels needs
+    to see which hotel each one belongs to, not just an opaque id."""
 
     model_config = ConfigDict(from_attributes=True)
 
     id: int
-    room_id: int
+    room: RoomOut
     check_in_date: date
     check_out_date: date
     guests: int

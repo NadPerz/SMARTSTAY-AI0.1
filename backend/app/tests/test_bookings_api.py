@@ -150,7 +150,7 @@ def test_create_room_rejects_guest_role(client, auth_headers):
     assert response.status_code == 403
 
 
-def test_create_room_succeeds_for_staff(client, db_session):
+def test_create_room_succeeds_for_staff(client, db_session, seeded_hotel):
     from app.models.user import User
     from app.security.jwt import create_access_token
 
@@ -163,14 +163,20 @@ def test_create_room_succeeds_for_staff(client, db_session):
 
     response = client.post(
         "/api/rooms",
-        json={"room_number": "703", "room_type": "Suite", "capacity": 3, "price_per_night": 200.00},
+        json={
+            "hotel_id": seeded_hotel.id,
+            "room_number": "703",
+            "room_type": "Suite",
+            "capacity": 3,
+            "price_per_night": 200.00,
+        },
         headers=headers,
     )
     assert response.status_code == 201, response.text
     assert response.json()["room_number"] == "703"
 
 
-def test_create_room_duplicate_returns_409(client, seeded_room, db_session):
+def test_create_room_duplicate_returns_409(client, seeded_room, seeded_hotel, db_session):
     from app.models.user import User
     from app.security.jwt import create_access_token
 
@@ -183,6 +189,7 @@ def test_create_room_duplicate_returns_409(client, seeded_room, db_session):
     response = client.post(
         "/api/rooms",
         json={
+            "hotel_id": seeded_hotel.id,
             "room_number": seeded_room.room_number,
             "room_type": "Standard",
             "capacity": 2,
@@ -191,6 +198,58 @@ def test_create_room_duplicate_returns_409(client, seeded_room, db_session):
         headers=headers,
     )
     assert response.status_code == 409
+
+
+def test_list_hotels_public(client, seeded_hotel):
+    response = client.get("/api/hotels")
+    assert response.status_code == 200
+    names = [h["name"] for h in response.json()]
+    assert seeded_hotel.name in names
+
+
+def test_get_hotel_not_found(client):
+    response = client.get("/api/hotels/9999")
+    assert response.status_code == 404
+
+
+def test_create_hotel_requires_staff(client, auth_headers):
+    response = client.post(
+        "/api/hotels", json={"name": "New Hotel", "city": "Jaffna"}, headers=auth_headers
+    )
+    assert response.status_code == 403
+
+
+def test_search_rooms_filters_by_city(client, db_session, seeded_hotel, seeded_room):
+    from app.models.hotel import Hotel
+    from app.models.room import Room
+
+    other_hotel = Hotel(name="Kandy Hotel", city="Kandy")
+    db_session.add(other_hotel)
+    db_session.commit()
+    other_room = Room(
+        hotel_id=other_hotel.id,
+        room_number="1",
+        room_type="Standard",
+        capacity=2,
+        price_per_night=60.00,
+    )
+    db_session.add(other_room)
+    db_session.commit()
+
+    check_in, check_out = _dates()
+    response = client.get(
+        "/api/rooms/search",
+        params={
+            "check_in_date": check_in,
+            "check_out_date": check_out,
+            "guests": 1,
+            "city": seeded_hotel.city,
+        },
+    )
+    assert response.status_code == 200
+    results = response.json()
+    assert len(results) == 1
+    assert results[0]["room"]["hotel"]["city"] == seeded_hotel.city
 
 
 def test_unauthenticated_request_to_protected_route_rejected(client):

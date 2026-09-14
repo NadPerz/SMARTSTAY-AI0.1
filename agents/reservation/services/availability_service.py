@@ -4,15 +4,67 @@ from typing import List, Optional
 from sqlalchemy.orm import Session
 
 from app.models.booking import Booking, BookingStatus
+from app.models.hotel import Hotel
 from app.models.room import Room
 
 from agents.reservation.schemas.bookings import AvailabilityCheckResponse
-from agents.reservation.schemas.rooms import RoomOut, RoomSearchRequest, RoomSearchResult
-from agents.reservation.services.exceptions import RoomNotFoundError, RoomCreateRequest, RoomAlreadyExistsError
+from agents.reservation.schemas.hotels import HotelCreateRequest
+from agents.reservation.schemas.rooms import (
+    RoomCreateRequest,
+    RoomOut,
+    RoomSearchRequest,
+    RoomSearchResult,
+)
+from agents.reservation.services.exceptions import (
+    HotelNotFoundError,
+    RoomAlreadyExistsError,
+    RoomNotFoundError,
+)
 
 
 def _nights(check_in_date: date, check_out_date: date) -> int:
     return (check_out_date - check_in_date).days
+
+
+# --- Hotels --------------------------------------------------------------
+
+def get_hotel(db: Session, hotel_id: int) -> Hotel:
+    hotel = db.query(Hotel).filter(Hotel.id == hotel_id).first()
+    if hotel is None:
+        raise HotelNotFoundError(f"Hotel {hotel_id} does not exist")
+    return hotel
+
+
+def list_hotels(db: Session, city: Optional[str] = None) -> List[Hotel]:
+    """List hotels on the platform, optionally filtered to one city.
+
+    This is what a guest browsing by location (rather than searching by
+    date/guests first) would call — "show me hotels in Kandy" before
+    "show me available rooms."
+    """
+    query = db.query(Hotel)
+    if city:
+        query = query.filter(Hotel.city.ilike(city))
+    return query.order_by(Hotel.city, Hotel.name).all()
+
+
+def create_hotel(db: Session, request: HotelCreateRequest) -> Hotel:
+    """Admin-only: add a new hotel to the platform. Authorization is
+    enforced at the API layer, not here."""
+    hotel = Hotel(
+        name=request.name,
+        city=request.city,
+        address=request.address,
+        description=request.description,
+        star_rating=request.star_rating,
+    )
+    db.add(hotel)
+    db.commit()
+    db.refresh(hotel)
+    return hotel
+
+
+# --- Rooms -----------------------------------------------------------------
 
 def get_room(db: Session, room_id: int) -> Room:
     """Fetch a single room by id, or raise RoomNotFoundError.
@@ -28,21 +80,30 @@ def get_room(db: Session, room_id: int) -> Room:
 
 
 def create_room(db: Session, request: RoomCreateRequest) -> Room:
-    """Admin-only: add a new room to inventory.
+    """Admin-only: add a new room to a hotel's inventory.
 
     Authorization (staff-only) is enforced at the API layer, not here —
-    this function assumes the caller has already been checked. Guards
-    against duplicate room_number with a pre-check rather than relying on
-    the DB's unique constraint to raise (which would surface as a raw
-    IntegrityError instead of a clean, catchable domain exception).
+    this function assumes the caller has already been checked. Validates
+    the hotel actually exists, and guards against a duplicate room_number
+    WITHIN that hotel (two different hotels may reuse the same number)
+    with a pre-check rather than relying on the DB's unique constraint to
+    raise (which would surface as a raw IntegrityError instead of a clean,
+    catchable domain exception).
     """
-    existing = db.query(Room).filter(Room.room_number == request.room_number).first()
+    get_hotel(db, request.hotel_id)  # raises HotelNotFoundError if missing
+
+    existing = (
+        db.query(Room)
+        .filter(Room.hotel_id == request.hotel_id, Room.room_number == request.room_number)
+        .first()
+    )
     if existing is not None:
         raise RoomAlreadyExistsError(
-            f"Room number {request.room_number!r} already exists"
+            f"Room number {request.room_number!r} already exists at hotel {request.hotel_id}"
         )
 
     room = Room(
+        hotel_id=request.hotel_id,
         room_number=request.room_number,
         room_type=request.room_type,
         description=request.description,
@@ -88,11 +149,19 @@ def search_available_rooms(
     db: Session, request: RoomSearchRequest
 ) -> List[RoomSearchResult]:
     """Return active rooms matching the filters that have no overlapping
-    booking for the requested date range, with pricing computed."""
-    query = db.query(Room).filter(
+    booking for the requested date range, with pricing computed.
+
+    Searches across every hotel on the platform by default. Pass `city`
+    to narrow to one city, or `hotel_id` to search within one specific
+    hotel — both are optional and independent."""
+    query = db.query(Room).join(Hotel).filter(
         Room.is_active.is_(True),
         Room.capacity >= request.guests,
     )
+    if request.city:
+        query = query.filter(Hotel.city.ilike(request.city))
+    if request.hotel_id is not None:
+        query = query.filter(Room.hotel_id == request.hotel_id)
     if request.room_type:
         query = query.filter(Room.room_type == request.room_type)
     if request.max_price is not None:

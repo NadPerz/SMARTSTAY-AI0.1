@@ -7,6 +7,7 @@ from sqlalchemy.pool import StaticPool
 from app.db.database import Base, get_db
 from app.main import app
 from app.models.booking import Booking  # noqa: F401 (registers relationship)
+from app.models.hotel import Hotel
 from app.models.room import Room
 from app.models.user import User  # noqa: F401
 
@@ -50,8 +51,23 @@ def client(db_session):
 
 
 @pytest.fixture()
-def seeded_room(db_session):
-    room = Room(room_number="501", room_type="Suite", capacity=2, price_per_night=150.00)
+def seeded_hotel(db_session):
+    hotel = Hotel(name="Test Hotel Colombo", city="Colombo", star_rating=4)
+    db_session.add(hotel)
+    db_session.commit()
+    db_session.refresh(hotel)
+    return hotel
+
+
+@pytest.fixture()
+def seeded_room(db_session, seeded_hotel):
+    room = Room(
+        hotel_id=seeded_hotel.id,
+        room_number="501",
+        room_type="Suite",
+        capacity=2,
+        price_per_night=150.00,
+    )
     db_session.add(room)
     db_session.commit()
     db_session.refresh(room)

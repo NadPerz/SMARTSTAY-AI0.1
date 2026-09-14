@@ -34,6 +34,7 @@ class ReservationAgent(BaseAgent):
 
     # intent name -> (tool function, whether it requires an authenticated user)
     _TOOL_MAP: Dict[str, Tuple[Callable[..., Dict[str, Any]], bool]] = {
+        "list_hotels": (room_tools.list_hotels, False),
         "search_rooms": (room_tools.search_rooms, False),
         "check_availability": (room_tools.check_availability, False),
         "get_booking_summary": (booking_tools.get_booking_summary, False),

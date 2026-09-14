@@ -7,6 +7,10 @@ class ReservationError(Exception):
     """
 
 
+class HotelNotFoundError(ReservationError):
+    """Raised when a hotel_id doesn't exist."""
+
+
 class RoomNotFoundError(ReservationError):
     """Raised when a room_id doesn't exist or is inactive."""
 

@@ -74,6 +74,16 @@ def test_handle_task_search_rooms_dispatches_correctly(db_session, guest, room):
     assert result["data"]["count"] == 1
 
 
+def test_handle_task_list_hotels_dispatches_correctly(db_session, guest, hotel):
+    ctx = ReservationContext(db=db_session, current_user=guest)
+    result = _run(
+        reservation_agent.handle_message(ctx, {"intent": "list_hotels", "payload": {}})
+    )
+    assert result["status"] == "success"
+    assert result["data"]["count"] == 1
+    assert result["data"]["hotels"][0]["city"] == hotel.city
+
+
 def test_create_booking_requires_authenticated_context(db_session, room):
     check_in, check_out = _dates()
     anon_ctx = ReservationContext(db=db_session, current_user=None)
