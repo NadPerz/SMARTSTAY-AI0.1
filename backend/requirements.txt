@@ -9,3 +9,6 @@ passlib[bcrypt]
 bcrypt==4.0.1
 python-dotenv
 email-validator
+python-dotenv
+email-validator
+httpx
