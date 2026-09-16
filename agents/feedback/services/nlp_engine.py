@@ -1,123 +1,107 @@
-"""Rule-based sentiment and aspect-extraction engine for guest reviews.
+"""Sentiment and aspect-extraction engine for guest reviews.
 
-Deliberately NOT backed by spaCy/transformers/an LLM: nothing else in this
-repo has an ML/LLM dependency installed yet, and a lexicon approach is
-fully deterministic, has zero install/runtime cost, and is easy to unit
-test and explain in a viva. See docs/agents/feedback-analytics.md for the
-documented upgrade path to a transformer-based pipeline.
+Built on two small, well-established libraries rather than a hand-rolled
+lexicon or a full transformer/LLM pipeline:
 
-Every function here is pure (no DB, no I/O) so it can be tested in
-isolation from the rest of the agent.
+- spaCy (en_core_web_sm) for tokenization, lemmatization and sentence
+  segmentation — so "room"/"rooms"/"roomy" and different tenses all
+  normalize to a comparable form for aspect matching, and sentences are
+  split linguistically rather than by naive punctuation splitting.
+- VADER (Hutto & Gilbert, 2014) for sentiment polarity — a lexicon of
+  ~7,500 words tuned for exactly this kind of short, informal text, with
+  negation, intensifiers, punctuation and capitalization already handled.
+  This replaces an earlier hand-rolled ~70-word lexicon that scored any
+  word outside its list as neutral; VADER's much larger, published
+  lexicon covers far more real review vocabulary out of the box.
+
+Deliberately still NOT a transformer/LLM pipeline: nothing else in this
+repo depends on torch/transformers, and this keeps install size and
+startup time small while remaining "real" NLP tooling (spaCy + a
+peer-reviewed sentiment lexicon), not ad hoc string matching. See
+docs/agents/feedback-analytics.md for the documented upgrade path.
+
+`_NLP` and `_VADER` are loaded once at import time and reused for every
+call — reloading a spaCy model per-request would be needlessly slow.
 """
 
-import re
 from typing import Dict, List, Tuple
 
-# Words that flip the sign of sentiment found shortly after them
-# ("not good", "wasn't friendly"). Word-final "n't" is checked separately
-# so contractions (isn't, wasn't, don't...) are covered without listing
-# every one of them.
-NEGATIONS = {"not", "no", "never", "none", "without", "hardly", "barely", "cannot"}
+import spacy
+from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
 
-# How many tokens after a negation word still count as negated.
-_NEGATION_SCOPE = 3
+_NLP = spacy.load("en_core_web_sm")
+_VADER = SentimentIntensityAnalyzer()
 
-# Deliberately excludes context-dependent words like "cheap" (could be
-# praise for value or a complaint about quality) — those are left as
-# aspect-only keywords below rather than guessed at.
-POSITIVE_WORDS: Dict[str, float] = {
-    "amazing": 2.0, "excellent": 2.0, "wonderful": 2.0, "fantastic": 2.0,
-    "perfect": 2.0, "outstanding": 2.0, "great": 1.5, "beautiful": 1.5,
-    "friendly": 1.5, "helpful": 1.5, "lovely": 1.5, "impressive": 1.5,
-    "attentive": 1.5, "love": 1.5, "loved": 1.5, "best": 1.5,
-    "welcoming": 1.5, "good": 1.0, "nice": 1.0, "comfortable": 1.0,
-    "clean": 1.0, "spacious": 1.0, "delicious": 1.0, "quiet": 1.0,
-    "convenient": 1.0, "affordable": 1.0, "fresh": 1.0, "polite": 1.0,
-    "recommend": 1.0, "recommended": 1.0, "enjoyed": 1.0, "satisfied": 1.0,
-    "pleasant": 1.0, "smooth": 1.0, "fast": 0.5,
+# VADER's ~7,500-word lexicon is tuned for general/social-media text and
+# was found (during manual REPL testing — see docs/agents/feedback-analytics.md)
+# to be missing common hospitality complaint words that carry no
+# exclamatory tone but are still clearly negative in a review ("the room
+# was small", "breakfast was expensive"). VADER's own supported way to
+# domain-adapt without retraining is extending its lexicon directly, on
+# its normal valence scale (roughly -4..+4).
+_HOSPITALITY_LEXICON: Dict[str, float] = {
+    "expensive": -1.5, "overpriced": -2.2, "slow": -1.4, "understaffed": -1.8,
+    "cramped": -1.6, "outdated": -1.2, "dated": -1.0, "noisy": -1.5,
+    "unhelpful": -2.0,
+    "spacious": 1.8, "convenient": 1.6, "comfortable": 1.9, "affordable": 1.4,
+    "attentive": 2.0, "welcoming": 2.1, "polite": 1.6,
 }
+_VADER.lexicon.update(_HOSPITALITY_LEXICON)
 
-NEGATIVE_WORDS: Dict[str, float] = {
-    "terrible": 2.0, "horrible": 2.0, "awful": 2.0, "worst": 2.0,
-    "filthy": 2.0, "unacceptable": 2.0, "rude": 2.0, "bad": 1.5,
-    "poor": 1.5, "dirty": 1.5, "unfriendly": 1.5, "disappointing": 1.5,
-    "disappointed": 1.5, "overpriced": 1.5, "broken": 1.5, "smelly": 1.5,
-    "unhelpful": 1.5, "cramped": 1.0, "slow": 1.0, "uncomfortable": 1.0,
-    "noisy": 1.0, "expensive": 1.0, "complaint": 1.0, "complaints": 1.0,
-    "problem": 1.0, "problems": 1.0, "issue": 1.0, "issues": 1.0,
-    "delayed": 1.0, "understaffed": 1.0, "disorganized": 1.0,
-    "mediocre": 1.0, "dated": 0.5, "outdated": 0.5, "small": 0.5, "cold": 0.5,
-}
+# VADER's own recommended thresholds for its compound score (-1..1).
+_POSITIVE_THRESHOLD = 0.05
+_NEGATIVE_THRESHOLD = -0.05
+
+_CONTRAST_WORDS = {"but", "however", "although", "though", "yet"}
 
 ASPECT_KEYWORDS: Dict[str, List[str]] = {
-    "room": ["room", "rooms", "bed", "bedroom", "bathroom", "suite"],
+    "room": ["room", "bed", "bedroom", "bathroom", "suite"],
     "staff": ["staff", "receptionist", "reception", "employee", "waiter", "waitress"],
     "breakfast": ["breakfast", "buffet"],
-    "price": ["price", "pricing", "cost", "expensive", "cheap", "value", "rate", "rates", "overpriced"],
-    "location": ["location", "located", "nearby", "distance", "central"],
+    "price": ["price", "pricing", "cost", "expensive", "cheap", "value", "rate", "overpriced"],
+    "location": ["location", "locate", "nearby", "distance", "central"],
     "cleanliness": ["clean", "cleanliness", "dirty", "filthy", "dust", "hygiene", "smell", "smelly"],
     "service": ["service", "check-in", "check in", "checkin", "check-out", "checkout", "front desk"],
 }
 
-_SENTENCE_SPLIT_RE = re.compile(r"[.!?]+")
-_CONTRAST_SPLIT_RE = re.compile(r"\b(?:but|however|although|though|yet)\b", re.IGNORECASE)
-_TOKEN_RE = re.compile(r"[a-zA-Z]+(?:'[a-zA-Z]+)?")
-
-
-def _tokenize(text: str) -> List[str]:
-    return [t.lower() for t in _TOKEN_RE.findall(text)]
-
 
 def split_clauses(text: str) -> List[str]:
-    """Split review text into sentence- and clause-level chunks.
-
-    Splitting further on contrastive conjunctions ("but", "however", ...)
-    is what lets a single sentence like "The room was beautiful but
-    breakfast was slow" produce two independently-scored clauses instead
-    of one sentence-level average that would wash the negative part out.
+    """Split review text into clause-level chunks: spaCy sentence
+    segmentation, then a further split on contrastive conjunctions
+    ("but", "however", ...) so mixed sentences like "The room was
+    beautiful but breakfast was slow" produce two independently-scored
+    clauses instead of one sentence-level average that would wash the
+    negative half out.
     """
     clauses: List[str] = []
-    for sentence in _SENTENCE_SPLIT_RE.split(text):
-        sentence = sentence.strip()
-        if not sentence:
-            continue
-        for part in _CONTRAST_SPLIT_RE.split(sentence):
-            part = part.strip(" ,")
-            if part:
-                clauses.append(part)
+
+    for sent in _NLP(text).sents:
+        current: List[str] = []
+        for token in sent:
+            if token.lower_ in _CONTRAST_WORDS and current:
+                clause = "".join(current).strip(" ,")
+                if clause:
+                    clauses.append(clause)
+                current = []
+                continue
+            current.append(token.text_with_ws)
+
+        clause = "".join(current).strip(" ,")
+        if clause:
+            clauses.append(clause)
+
     return clauses
 
 
 def score_clause(clause: str) -> float:
-    """Sum of lexicon weights in a clause, with negation flipping the sign
-    of any sentiment word found within `_NEGATION_SCOPE` tokens after a
-    negation word (so "not good" scores negative, not positive)."""
-    score = 0.0
-    negation_countdown = 0
-
-    for token in _tokenize(clause):
-        is_negation = token in NEGATIONS or token.endswith("n't")
-        weight = 0.0
-        if token in POSITIVE_WORDS:
-            weight = POSITIVE_WORDS[token]
-        elif token in NEGATIVE_WORDS:
-            weight = -NEGATIVE_WORDS[token]
-
-        if weight != 0.0:
-            score += -weight if negation_countdown > 0 else weight
-
-        if is_negation:
-            negation_countdown = _NEGATION_SCOPE
-        elif negation_countdown > 0:
-            negation_countdown -= 1
-
-    return score
+    """VADER's compound sentiment score for a clause, in [-1, 1]."""
+    return _VADER.polarity_scores(clause)["compound"]
 
 
 def classify_score(score: float) -> str:
-    if score > 0:
+    if score >= _POSITIVE_THRESHOLD:
         return "positive"
-    if score < 0:
+    if score <= _NEGATIVE_THRESHOLD:
         return "negative"
     return "neutral"
 
@@ -125,17 +109,27 @@ def classify_score(score: float) -> str:
 def extract_aspect_sentiments(text: str) -> List[Dict[str, object]]:
     """Return one entry per (aspect, clause) match: which aspect was
     mentioned, the sentiment of the specific clause it was mentioned in,
-    a rough confidence, and the clause itself as supporting evidence."""
+    VADER's confidence for that clause, and the clause itself as
+    supporting evidence.
+
+    Aspect matching checks both the clause's surface text and its
+    spaCy lemmas, so "rooms"/"roomy stay" etc. still match the "room"
+    keyword without needing every inflection listed by hand.
+    """
     results: List[Dict[str, object]] = []
 
     for clause in split_clauses(text):
+        clause_doc = _NLP(clause)
         clause_lower = clause.lower()
-        score = score_clause(clause)
-        sentiment = classify_score(score)
-        confidence = round(min(1.0, abs(score) / 3.0), 2) if score != 0 else 0.3
+        lemma_text = " ".join(token.lemma_.lower() for token in clause_doc)
+
+        scores = _VADER.polarity_scores(clause)
+        compound = scores["compound"]
+        sentiment = classify_score(compound)
+        confidence = round(max(scores["pos"], scores["neg"], scores["neu"]), 2)
 
         for aspect, keywords in ASPECT_KEYWORDS.items():
-            if any(keyword in clause_lower for keyword in keywords):
+            if any(kw in clause_lower or kw in lemma_text for kw in keywords):
                 results.append(
                     {
                         "aspect": aspect,
@@ -160,8 +154,8 @@ def overall_sentiment(text: str) -> Tuple[str, float]:
     scores = [score_clause(clause) for clause in clauses]
     average = sum(scores) / len(scores)
 
-    has_positive = any(s > 0 for s in scores)
-    has_negative = any(s < 0 for s in scores)
+    has_positive = any(s >= _POSITIVE_THRESHOLD for s in scores)
+    has_negative = any(s <= _NEGATIVE_THRESHOLD for s in scores)
     label = "mixed" if has_positive and has_negative else classify_score(average)
 
-    return label, round(average, 2)
+    return label, round(average, 4)
