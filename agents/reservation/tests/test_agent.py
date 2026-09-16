@@ -6,6 +6,7 @@ from app.schemas.a2a import A2ARequest
 
 from agents.reservation.agent import reservation_agent
 from agents.reservation.agent_context import ReservationContext
+from agents.concierge.agent import ConciergeAgent
 
 TODAY = date.today()
 
@@ -132,3 +133,56 @@ def test_spoofed_user_id_in_a2a_request_is_ignored(db_session, guest, other_gues
     created = db_session.query(Booking).filter(Booking.id == result["data"]["id"]).first()
     assert created.user_id == guest.id
     assert created.user_id != other_guest.id
+
+
+def test_concierge_delegates_booking_and_creates_confirmed_booking(
+    db_session, guest, room
+):
+    check_in, check_out = _dates()
+    concierge = ConciergeAgent()
+    context = ReservationContext(db=db_session, current_user=guest)
+
+    result = _run(
+        concierge.handle_message(
+            context,
+            {
+                "message": "book me a room",
+                "operation": "create_booking",
+                "payload": {
+                    "room_id": room.id,
+                    "check_in_date": check_in,
+                    "check_out_date": check_out,
+                    "guests": 2,
+                    "confirm": True,
+                },
+            },
+        )
+    )
+
+    assert result["status"] == "success"
+    assert result["agent"] == "concierge"
+    assert result["data"]["delegated_to"] == "reservation"
+    created = db_session.query(Booking).one()
+    assert created.status == "confirmed"
+    assert created.user_id == guest.id
+
+
+def test_concierge_returns_graceful_reservation_error(db_session, guest, room):
+    concierge = ConciergeAgent()
+    context = ReservationContext(db=db_session, current_user=guest)
+
+    result = _run(
+        concierge.handle_message(
+            context,
+            {
+                "message": "book me a room",
+                "operation": "create_booking",
+                "payload": {"room_id": room.id},
+            },
+        )
+    )
+
+    assert result["status"] == "error"
+    assert result["agent"] == "concierge"
+    assert result["data"] == {}
+    assert "Missing required parameter" in result["error"]
