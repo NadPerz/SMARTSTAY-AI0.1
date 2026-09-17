@@ -12,3 +12,5 @@ email-validator
 python-dotenv
 email-validator
 httpx
+fastembed
+faiss-cpu
