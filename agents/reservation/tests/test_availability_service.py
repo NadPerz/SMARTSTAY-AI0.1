@@ -27,6 +27,21 @@ def test_search_finds_room_when_free(db_session, room):
     assert results[0].total_price == room.price_per_night * 3
 
 
+def test_search_room_type_is_case_insensitive(db_session, room):
+    check_in, check_out = _dates()
+    results = availability_service.search_available_rooms(
+        db_session,
+        RoomSearchRequest(
+            check_in_date=check_in,
+            check_out_date=check_out,
+            guests=2,
+            room_type="deluxe",
+        ),
+    )
+
+    assert [result.room.id for result in results] == [room.id]
+
+
 def test_search_excludes_rooms_under_requested_capacity(db_session, room):
     check_in, check_out = _dates()
     results = availability_service.search_available_rooms(

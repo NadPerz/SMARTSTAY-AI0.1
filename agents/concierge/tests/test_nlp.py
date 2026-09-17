@@ -133,3 +133,31 @@ def test_room_search_failure_is_returned_to_guest(monkeypatch):
 
     assert response["status"] == "error"
     assert response["error"] == "search unavailable"
+
+
+def test_room_availability_message_delegates_to_search_rooms(monkeypatch):
+    delegated = {}
+
+    async def search_rooms(context, request):
+        delegated.update(request)
+        return {"status": "success", "data": {"count": 1, "rooms": []}}
+
+    monkeypatch.setattr(
+        "agents.concierge.agent.reservation_agent.handle_message", search_rooms
+    )
+    response = asyncio.run(
+        ConciergeAgent().handle_message(
+            ReservationContext(db=None, current_user=object()),
+            "Find available deluxe rooms for 2 guests from December 1 to December 4, 2026",
+        )
+    )
+
+    assert response["status"] == "success"
+    assert response["data"]["intent"] == "Reservation"
+    assert delegated["intent"] == "search_rooms"
+    assert delegated["payload"] == {
+        "room_type": "deluxe",
+        "check_in_date": "2026-12-01",
+        "check_out_date": "2026-12-04",
+        "guests": 2,
+    }
