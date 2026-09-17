@@ -14,6 +14,9 @@ class ReviewCreateRequest(BaseModel):
 
 
 class AspectSentimentOut(BaseModel):
+    """One (aspect, sentiment) pair extracted from a review's text, with
+    the clause it was derived from kept as supporting evidence."""
+
     aspect: str
     sentiment: str
     confidence: float
@@ -23,6 +26,9 @@ class AspectSentimentOut(BaseModel):
 
 
 class ReviewOut(BaseModel):
+    """A stored Review as returned to API clients, including its
+    server-computed sentiment and per-aspect breakdown."""
+
     id: int
     user_id: int
     hotel_id: Optional[int]

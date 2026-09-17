@@ -37,6 +37,7 @@ def list_reviews(
 
 @router.get("/reviews/{review_id}", response_model=ReviewOut)
 def get_review(review_id: int, db: Session = Depends(get_db)):
+    """Public — fetch a single review by id, 404 if it doesn't exist."""
     try:
         return review_service.get_review(db, review_id)
     except ReviewNotFoundError as exc:

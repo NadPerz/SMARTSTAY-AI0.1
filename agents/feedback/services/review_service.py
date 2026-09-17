@@ -45,6 +45,7 @@ def create_review(db: Session, user_id: int, request: ReviewCreateRequest) -> Re
 
 
 def get_review(db: Session, review_id: int) -> Review:
+    """Fetch one review by id, raising ReviewNotFoundError if it doesn't exist."""
     review = db.query(Review).filter(Review.id == review_id).first()
     if review is None:
         raise ReviewNotFoundError(f"Review {review_id} not found")
@@ -52,6 +53,7 @@ def get_review(db: Session, review_id: int) -> Review:
 
 
 def list_reviews(db: Session, hotel_id: Optional[int] = None) -> List[Review]:
+    """List reviews newest-first, optionally filtered to one hotel."""
     query = db.query(Review)
     if hotel_id is not None:
         query = query.filter(Review.hotel_id == hotel_id)

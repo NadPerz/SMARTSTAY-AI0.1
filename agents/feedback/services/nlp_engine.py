@@ -99,6 +99,8 @@ def score_clause(clause: str) -> float:
 
 
 def classify_score(score: float) -> str:
+    """Map a VADER compound score to a label using VADER's own
+    recommended thresholds."""
     if score >= _POSITIVE_THRESHOLD:
         return "positive"
     if score <= _NEGATIVE_THRESHOLD:
