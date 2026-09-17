@@ -2,6 +2,8 @@ from typing import Any, Dict, Optional, Union
 
 from app.schemas.a2a import A2AResponse
 from agents.common.base_agent import BaseAgent
+from agents.concierge.services.entities import extract_entities
+from agents.concierge.services.rag import answer_faq
 from agents.reservation.agent import reservation_agent
 from agents.reservation.agent_context import ReservationContext
 
@@ -77,12 +79,27 @@ class ConciergeAgent(BaseAgent):
         text = message if isinstance(message, str) else message.get("message", "")
         self.message = text
         intent = self.classify_intent(text)
+        entities = extract_entities(text)
 
         if intent != "Reservation":
+            if intent == "FAQ":
+                faq = answer_faq(text)
+                return A2AResponse(
+                    status="success",
+                    agent=self.name,
+                    data={
+                        "intent": intent,
+                        "message": text,
+                        "entities": entities,
+                        "answer": faq["answer"],
+                        "sources": faq["sources"],
+                        **({"error": faq["error"]} if faq.get("error") else {}),
+                    },
+                ).model_dump()
             return A2AResponse(
                 status="success",
                 agent=self.name,
-                data={"intent": intent, "message": text},
+                data={"intent": intent, "message": text, "entities": entities},
             ).model_dump()
 
         if context is None:
@@ -116,6 +133,7 @@ class ConciergeAgent(BaseAgent):
             agent=self.name,
             data={
                 "intent": intent,
+                "entities": entities,
                 "delegated_to": reservation_agent.name,
                 "operation": operation,
                 "result": reservation_result.get("data", {}),
