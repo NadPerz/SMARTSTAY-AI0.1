@@ -45,6 +45,11 @@ class ConciergeAgent(BaseAgent):
             return "FAQ"
 
         normalized_message = message.lower()
+        if (
+            ("cancellation" in normalized_message or "cancel" in normalized_message)
+            and any(term in normalized_message for term in ("policy", "fee", "charge", "refund"))
+        ):
+            return "FAQ"
         for intent, keywords in self._INTENT_KEYWORDS.items():
             if any(keyword in normalized_message for keyword in keywords):
                 return intent
@@ -109,8 +114,33 @@ class ConciergeAgent(BaseAgent):
 
         request = message if isinstance(message, dict) else {}
         payload = dict(request.get("payload") or {})
+        for key, value in entities.items():
+            payload.setdefault(key, value)
         operation = request.get("operation") or payload.pop("operation", None)
         operation = operation or "create_booking"
+        if (
+            operation == "create_booking"
+            and "room_id" not in payload
+            and all(key in payload for key in ("room_type", "check_in_date", "check_out_date", "guests"))
+        ):
+            search_result = await reservation_agent.handle_message(
+                context,
+                {"intent": "search_rooms", "payload": {
+                    key: payload[key]
+                    for key in ("room_type", "check_in_date", "check_out_date", "guests")
+                }},
+            )
+            rooms = search_result.get("data", {}).get("rooms", [])
+            if len(rooms) != 1:
+                message = (
+                    "I found no available matching rooms."
+                    if not rooms
+                    else "I found multiple matching rooms. Please choose a room before I confirm the booking."
+                )
+                return self._error_response(message).model_dump()
+            payload["room_id"] = rooms[0]["room"]["id"]
+        if operation == "create_booking":
+            payload.pop("room_type", None)
         delegation = {"intent": operation, "payload": payload}
 
         try:
