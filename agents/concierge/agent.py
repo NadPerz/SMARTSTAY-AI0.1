@@ -1,3 +1,4 @@
+import re
 from typing import Any, Dict, Optional, Union
 
 from app.schemas.a2a import A2AResponse
@@ -39,15 +40,23 @@ class ConciergeAgent(BaseAgent):
         super().__init__("concierge")
         self.message = message
 
-    def classify_intent(self, message: Optional[str] = None) -> str:
+    def classify_intent(
+        self, message: Optional[str] = None, operation: Optional[str] = None
+    ) -> str:
         message = message if message is not None else self.message
         if not message:
             return "FAQ"
 
         normalized_message = message.lower()
+        if operation == "cancel_booking":
+            return "Reservation"
         if (
             ("cancellation" in normalized_message or "cancel" in normalized_message)
             and any(term in normalized_message for term in ("policy", "fee", "charge", "refund"))
+            and not re.search(
+                r"\b(cancel|cancellation)\b.*\b(booking|reservation|it)\b",
+                normalized_message,
+            )
         ):
             return "FAQ"
         for intent, keywords in self._INTENT_KEYWORDS.items():
@@ -83,7 +92,11 @@ class ConciergeAgent(BaseAgent):
         """
         text = message if isinstance(message, str) else message.get("message", "")
         self.message = text
-        intent = self.classify_intent(text)
+        request = message if isinstance(message, dict) else {}
+        requested_operation = request.get("operation") or (request.get("payload") or {}).get(
+            "operation"
+        )
+        intent = self.classify_intent(text, operation=requested_operation)
         entities = extract_entities(text)
 
         if intent != "Reservation":
@@ -112,7 +125,6 @@ class ConciergeAgent(BaseAgent):
                 "Reservation requests require an authenticated reservation context"
             ).model_dump()
 
-        request = message if isinstance(message, dict) else {}
         payload = dict(request.get("payload") or {})
         for key, value in entities.items():
             payload.setdefault(key, value)
@@ -130,6 +142,11 @@ class ConciergeAgent(BaseAgent):
                     for key in ("room_type", "check_in_date", "check_out_date", "guests")
                 }},
             )
+            if search_result.get("status") != "success":
+                return self._error_response(
+                    search_result.get("error")
+                    or "Could not find available rooms for the requested criteria"
+                ).model_dump()
             rooms = search_result.get("data", {}).get("rooms", [])
             if len(rooms) != 1:
                 message = (
