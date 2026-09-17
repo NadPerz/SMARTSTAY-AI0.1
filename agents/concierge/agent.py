@@ -13,12 +13,26 @@ class ConciergeAgent(BaseAgent):
     _SEARCH_TERMS = (
         "find",
         "search",
-        "available room",
-        "available rooms",
-        "room availability",
-        "check availability",
         "show me",
         "look for",
+    )
+    _ROOM_SEARCH_SIGNALS = (
+        "room",
+        "rooms",
+        "availability",
+        "check-in",
+        "check in",
+        "check-out",
+        "check out",
+        "guest",
+        "guests",
+        "suite",
+        "deluxe",
+        "single",
+        "double",
+        "twin",
+        "king",
+        "queen",
     )
     _INTENT_KEYWORDS = {
         "Reservation": (
@@ -69,8 +83,12 @@ class ConciergeAgent(BaseAgent):
         ):
             return "FAQ"
         if (
-            any(term in normalized_message for term in self._SEARCH_TERMS)
-            or ("available" in normalized_message and "room" in normalized_message)
+            any(term in normalized_message for term in self._ROOM_SEARCH_SIGNALS)
+            and (
+                any(term in normalized_message for term in self._SEARCH_TERMS)
+                or "available" in normalized_message
+                or "availability" in normalized_message
+            )
         ):
             return "Reservation"
         for intent, keywords in self._INTENT_KEYWORDS.items():
@@ -82,7 +100,11 @@ class ConciergeAgent(BaseAgent):
     def _is_room_search(cls, message: str, entities: Dict[str, Any]) -> bool:
         normalized = message.lower()
         return (
-            any(term in normalized for term in cls._SEARCH_TERMS)
+            (
+                any(term in normalized for term in cls._SEARCH_TERMS)
+                and any(term in normalized for term in cls._ROOM_SEARCH_SIGNALS)
+            )
+            or any(term in normalized for term in ("available", "availability"))
             or "room_type" in entities
             or "check_in_date" in entities
             or "check_out_date" in entities

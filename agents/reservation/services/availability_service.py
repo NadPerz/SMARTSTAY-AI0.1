@@ -163,7 +163,7 @@ def search_available_rooms(
     if request.hotel_id is not None:
         query = query.filter(Room.hotel_id == request.hotel_id)
     if request.room_type:
-        query = query.filter(Room.room_type.ilike(request.room_type))
+        query = query.filter(Room.room_type.ilike(f"%{request.room_type}%"))
     if request.max_price is not None:
         query = query.filter(Room.price_per_night <= request.max_price)
 

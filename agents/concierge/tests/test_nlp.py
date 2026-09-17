@@ -161,3 +161,7 @@ def test_room_availability_message_delegates_to_search_rooms(monkeypatch):
         "check_out_date": "2026-12-04",
         "guests": 2,
     }
+
+
+def test_find_restaurant_is_not_room_search():
+    assert ConciergeAgent().classify_intent("Find a restaurant") == "Recommendation"

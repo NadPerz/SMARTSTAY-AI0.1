@@ -42,6 +42,33 @@ def test_search_room_type_is_case_insensitive(db_session, room):
     assert [result.room.id for result in results] == [room.id]
 
 
+def test_search_room_type_matches_compound_name(db_session, hotel):
+    from app.models.room import Room
+
+    compound_room = Room(
+        hotel_id=hotel.id,
+        room_number="202",
+        room_type="Deluxe Suite",
+        capacity=2,
+        price_per_night=150.00,
+    )
+    db_session.add(compound_room)
+    db_session.commit()
+    check_in, check_out = _dates()
+
+    results = availability_service.search_available_rooms(
+        db_session,
+        RoomSearchRequest(
+            check_in_date=check_in,
+            check_out_date=check_out,
+            guests=2,
+            room_type="suite",
+        ),
+    )
+
+    assert [result.room.id for result in results] == [compound_room.id]
+
+
 def test_search_excludes_rooms_under_requested_capacity(db_session, room):
     check_in, check_out = _dates()
     results = availability_service.search_available_rooms(
