@@ -5,7 +5,7 @@ from app.schemas.a2a import A2ARequest, A2AResponse
 
 from agents.common.base_agent import BaseAgent
 from agents.feedback.agent_context import FeedbackContext
-from agents.feedback.tools import review_tools
+from agents.feedback.tools import analytics_tools, review_tools
 
 
 class FeedbackAgent(BaseAgent):
@@ -32,6 +32,9 @@ class FeedbackAgent(BaseAgent):
         "submit_review": (review_tools.submit_review, True),
         "get_review": (review_tools.get_review, False),
         "list_reviews": (review_tools.list_reviews, False),
+        "get_sentiment_breakdown": (analytics_tools.get_sentiment_breakdown, False),
+        "get_aspect_summary": (analytics_tools.get_aspect_summary, False),
+        "get_analytics_overview": (analytics_tools.get_analytics_overview, False),
     }
 
     async def handle_message(
