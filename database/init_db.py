@@ -21,7 +21,7 @@ from app.models.hotel import Hotel  # noqa: F401
 from app.models.room import Room  # noqa: F401
 from app.models.booking import Booking  # noqa: F401
 from app.models.review import Review, ReviewAspect  # noqa: F401
-
+from app.models.place import Place  # noqa: F401
 
 def main() -> None:
     Base.metadata.create_all(bind=engine)
