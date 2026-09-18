@@ -2,6 +2,8 @@ from agents.concierge.services.entities import extract_entities
 from agents.concierge.services.rag import PolicyRetriever, chunk_document
 from agents.concierge.services.rag import answer_faq
 from agents.concierge.agent import ConciergeAgent
+from agents.reservation.agent_context import ReservationContext
+import asyncio
 
 
 def test_extracts_booking_entities():
@@ -88,3 +90,78 @@ def test_supported_check_in_question_returns_only_check_in_policy():
 
     assert response["sources"] == ["check-in-and-check-out.md"]
     assert "3:00 PM" in response["answer"]
+
+
+def test_explicit_cancel_operation_overrides_policy_words(monkeypatch):
+    delegated = {}
+
+    async def fake_handle(context, request):
+        delegated.update(request)
+        return {"status": "success", "data": {"cancelled": True}}
+
+    monkeypatch.setattr(
+        "agents.concierge.agent.reservation_agent.handle_message", fake_handle
+    )
+    response = asyncio.run(
+        ConciergeAgent().handle_message(
+            ReservationContext(db=None, current_user=object()),
+            {
+                "message": "Cancel my booking and refund the charge",
+                "operation": "cancel_booking",
+                "payload": {"booking_id": 1, "confirm": True},
+            },
+        )
+    )
+
+    assert response["status"] == "success"
+    assert delegated["intent"] == "cancel_booking"
+
+
+def test_room_search_failure_is_returned_to_guest(monkeypatch):
+    async def failed_search(context, request):
+        return {"status": "error", "data": {}, "error": "search unavailable"}
+
+    monkeypatch.setattr(
+        "agents.concierge.agent.reservation_agent.handle_message", failed_search
+    )
+    response = asyncio.run(
+        ConciergeAgent().handle_message(
+            ReservationContext(db=None, current_user=object()),
+            "Book a king room for 2 guests from October 6 to October 9",
+        )
+    )
+
+    assert response["status"] == "error"
+    assert response["error"] == "search unavailable"
+
+
+def test_room_availability_message_delegates_to_search_rooms(monkeypatch):
+    delegated = {}
+
+    async def search_rooms(context, request):
+        delegated.update(request)
+        return {"status": "success", "data": {"count": 1, "rooms": []}}
+
+    monkeypatch.setattr(
+        "agents.concierge.agent.reservation_agent.handle_message", search_rooms
+    )
+    response = asyncio.run(
+        ConciergeAgent().handle_message(
+            ReservationContext(db=None, current_user=object()),
+            "Find available deluxe rooms for 2 guests from December 1 to December 4, 2026",
+        )
+    )
+
+    assert response["status"] == "success"
+    assert response["data"]["intent"] == "Reservation"
+    assert delegated["intent"] == "search_rooms"
+    assert delegated["payload"] == {
+        "room_type": "deluxe",
+        "check_in_date": "2026-12-01",
+        "check_out_date": "2026-12-04",
+        "guests": 2,
+    }
+
+
+def test_find_restaurant_is_not_room_search():
+    assert ConciergeAgent().classify_intent("Find a restaurant") == "Recommendation"

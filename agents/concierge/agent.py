@@ -1,3 +1,4 @@
+import re
 from typing import Any, Dict, Optional, Union
 
 from app.schemas.a2a import A2AResponse
@@ -9,6 +10,30 @@ from agents.reservation.agent_context import ReservationContext
 
 
 class ConciergeAgent(BaseAgent):
+    _SEARCH_TERMS = (
+        "find",
+        "search",
+        "show me",
+        "look for",
+    )
+    _ROOM_SEARCH_SIGNALS = (
+        "room",
+        "rooms",
+        "availability",
+        "check-in",
+        "check in",
+        "check-out",
+        "check out",
+        "guest",
+        "guests",
+        "suite",
+        "deluxe",
+        "single",
+        "double",
+        "twin",
+        "king",
+        "queen",
+    )
     _INTENT_KEYWORDS = {
         "Reservation": (
             "book",
@@ -39,16 +64,52 @@ class ConciergeAgent(BaseAgent):
         super().__init__("concierge")
         self.message = message
 
-    def classify_intent(self, message: Optional[str] = None) -> str:
+    def classify_intent(
+        self, message: Optional[str] = None, operation: Optional[str] = None
+    ) -> str:
         message = message if message is not None else self.message
         if not message:
             return "FAQ"
-
         normalized_message = message.lower()
+        if operation == "cancel_booking":
+            return "Reservation"
+        if (
+            ("cancellation" in normalized_message or "cancel" in normalized_message)
+            and any(term in normalized_message for term in ("policy", "fee", "charge", "refund"))
+            and not re.search(
+                r"\b(cancel|cancellation)\b.*\b(booking|reservation|it)\b",
+                normalized_message,
+            )
+        ):
+            return "FAQ"
+        if (
+            any(term in normalized_message for term in self._ROOM_SEARCH_SIGNALS)
+            and (
+                any(term in normalized_message for term in self._SEARCH_TERMS)
+                or "available" in normalized_message
+                or "availability" in normalized_message
+            )
+        ):
+            return "Reservation"
         for intent, keywords in self._INTENT_KEYWORDS.items():
             if any(keyword in normalized_message for keyword in keywords):
                 return intent
         return "FAQ"
+
+    @classmethod
+    def _is_room_search(cls, message: str, entities: Dict[str, Any]) -> bool:
+        normalized = message.lower()
+        return (
+            (
+                any(term in normalized for term in cls._SEARCH_TERMS)
+                and any(term in normalized for term in cls._ROOM_SEARCH_SIGNALS)
+            )
+            or any(term in normalized for term in ("available", "availability"))
+            or "room_type" in entities
+            or "check_in_date" in entities
+            or "check_out_date" in entities
+            or "guests" in entities
+        ) and not re.search(r"\b(book|reserve|confirm)\b", normalized)
 
     def prepare_delegation_payload(
         self, message: Optional[str] = None
@@ -78,7 +139,11 @@ class ConciergeAgent(BaseAgent):
         """
         text = message if isinstance(message, str) else message.get("message", "")
         self.message = text
-        intent = self.classify_intent(text)
+        request = message if isinstance(message, dict) else {}
+        requested_operation = request.get("operation") or (request.get("payload") or {}).get(
+            "operation"
+        )
+        intent = self.classify_intent(text, operation=requested_operation)
         entities = extract_entities(text)
 
         if intent != "Reservation":
@@ -107,10 +172,65 @@ class ConciergeAgent(BaseAgent):
                 "Reservation requests require an authenticated reservation context"
             ).model_dump()
 
-        request = message if isinstance(message, dict) else {}
         payload = dict(request.get("payload") or {})
+        for key, value in entities.items():
+            payload.setdefault(key, value)
         operation = request.get("operation") or payload.pop("operation", None)
-        operation = operation or "create_booking"
+        operation = operation or (
+            "search_rooms" if self._is_room_search(text, entities) else "create_booking"
+        )
+        if operation == "search_rooms":
+            search_payload = {
+                key: payload[key]
+                for key in ("room_type", "check_in_date", "check_out_date", "guests")
+                if key in payload
+            }
+            search_result = await reservation_agent.handle_message(
+                context, {"intent": operation, "payload": search_payload}
+            )
+            if search_result.get("status") != "success":
+                return self._error_response(
+                    search_result.get("error") or "Room search could not be completed"
+                ).model_dump()
+            return A2AResponse(
+                status="success",
+                agent=self.name,
+                data={
+                    "intent": intent,
+                    "entities": entities,
+                    "delegated_to": reservation_agent.name,
+                    "operation": operation,
+                    "result": search_result.get("data", {}),
+                },
+            ).model_dump()
+        if (
+            operation == "create_booking"
+            and "room_id" not in payload
+            and all(key in payload for key in ("room_type", "check_in_date", "check_out_date", "guests"))
+        ):
+            search_result = await reservation_agent.handle_message(
+                context,
+                {"intent": "search_rooms", "payload": {
+                    key: payload[key]
+                    for key in ("room_type", "check_in_date", "check_out_date", "guests")
+                }},
+            )
+            if search_result.get("status") != "success":
+                return self._error_response(
+                    search_result.get("error")
+                    or "Could not find available rooms for the requested criteria"
+                ).model_dump()
+            rooms = search_result.get("data", {}).get("rooms", [])
+            if len(rooms) != 1:
+                message = (
+                    "I found no available matching rooms."
+                    if not rooms
+                    else "I found multiple matching rooms. Please choose a room before I confirm the booking."
+                )
+                return self._error_response(message).model_dump()
+            payload["room_id"] = rooms[0]["room"]["id"]
+        if operation == "create_booking":
+            payload.pop("room_type", None)
         delegation = {"intent": operation, "payload": payload}
 
         try:
