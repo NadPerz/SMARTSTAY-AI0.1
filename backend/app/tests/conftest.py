@@ -94,3 +94,14 @@ def other_auth_headers(client):
     assert response.status_code == 201, response.text
     token = response.json()["access_token"]
     return {"Authorization": f"Bearer {token}"}
+
+
+@pytest.fixture()
+def staff_auth_headers(client):
+    response = client.post(
+        "/auth/register",
+        json={"email": "pytest-staff@test.com", "password": "password123", "role": "manager"},
+    )
+    assert response.status_code == 201, response.text
+    token = response.json()["access_token"]
+    return {"Authorization": f"Bearer {token}"}
