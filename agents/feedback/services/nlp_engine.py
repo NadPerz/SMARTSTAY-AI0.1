@@ -52,7 +52,14 @@ _VADER.lexicon.update(_HOSPITALITY_LEXICON)
 _POSITIVE_THRESHOLD = 0.05
 _NEGATIVE_THRESHOLD = -0.05
 
-_CONTRAST_WORDS = {"but", "however", "although", "though", "yet"}
+# Split on these to keep each aspect's own sentiment in its own clause.
+# "and" is included alongside the contrastive words on purpose: without it,
+# "staff is not good and food is good" stays one clause, and the positive
+# "food is good" outweighs the negative "staff is not good" in VADER's
+# combined score - so "staff" wrongly inherits a positive verdict. Splitting
+# on "and" too means each aspect only ever gets scored against the words
+# actually describing it.
+_CLAUSE_SPLIT_WORDS = {"but", "however", "although", "though", "yet", "and"}
 
 ASPECT_KEYWORDS: Dict[str, List[str]] = {
     "room": ["room", "bed", "bedroom", "bathroom", "suite"],
@@ -67,18 +74,17 @@ ASPECT_KEYWORDS: Dict[str, List[str]] = {
 
 def split_clauses(text: str) -> List[str]:
     """Split review text into clause-level chunks: spaCy sentence
-    segmentation, then a further split on contrastive conjunctions
-    ("but", "however", ...) so mixed sentences like "The room was
-    beautiful but breakfast was slow" produce two independently-scored
-    clauses instead of one sentence-level average that would wash the
-    negative half out.
+    segmentation, then a further split on _CLAUSE_SPLIT_WORDS so each
+    aspect ends up scored only against the words actually describing it,
+    not sentiment belonging to a different aspect mentioned in the same
+    sentence (see the module-level comment on _CLAUSE_SPLIT_WORDS).
     """
     clauses: List[str] = []
 
     for sent in _NLP(text).sents:
         current: List[str] = []
         for token in sent:
-            if token.lower_ in _CONTRAST_WORDS and current:
+            if token.lower_ in _CLAUSE_SPLIT_WORDS and current:
                 clause = "".join(current).strip(" ,")
                 if clause:
                     clauses.append(clause)
